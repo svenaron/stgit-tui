@@ -98,7 +98,7 @@ pub fn get_branch_info() -> Result<BranchInfo> {
 
 pub fn get_history(count: usize) -> Result<Vec<String>> {
     // Show commits below the stack base
-    let base = run_cmd("stg", &["id", "--branch", "", "{base}"])
+    let base = run_cmd("stg", &["id", "{base}"])
         .unwrap_or_default()
         .trim()
         .to_string();
@@ -110,36 +110,7 @@ pub fn get_history(count: usize) -> Result<Vec<String>> {
 }
 
 pub fn get_patches() -> Result<Vec<Patch>> {
-    let output = run_cmd("stg", &["series", "--format=%sr %cn %cd  %ds", "--all"])?;
     let mut patches = Vec::new();
-    for line in output.lines() {
-        if line.is_empty() {
-            continue;
-        }
-        // First char is status: +, >, -
-        // Second char might be space or other
-        let status_char = line.chars().next().unwrap_or(' ');
-        let rest = &line[1..];
-        let status = match status_char {
-            '>' => PatchStatus::Current,
-            '+' => PatchStatus::Applied,
-            '-' => PatchStatus::Unapplied,
-            _ => PatchStatus::Unapplied,
-        };
-        // Rest format: " name description"
-        // Actually stg series --format gives us formatted output
-        // Let's parse more carefully
-        let rest = rest.trim_start();
-        patches.push(Patch {
-            name: String::new(), // we'll fill from a separate call
-            description: rest.to_string(),
-            status,
-            empty: false,
-        });
-    }
-
-    // Get proper names and descriptions separately for reliability
-    patches.clear();
     let series_output = run_cmd("stg", &["series", "--all", "--description"])?;
     for line in series_output.lines() {
         if line.is_empty() {
@@ -158,8 +129,11 @@ pub fn get_patches() -> Result<Vec<Patch>> {
         };
 
         let (name, description) = match rest.find(" # ") {
-            Some(pos) => (rest[..pos].to_string(), rest[pos + 3..].to_string()),
-            None => (rest.to_string(), String::new()),
+            Some(pos) => (
+                rest[..pos].trim_end().to_string(),
+                rest[pos + 3..].to_string(),
+            ),
+            None => (rest.trim_end().to_string(), String::new()),
         };
 
         patches.push(Patch {
