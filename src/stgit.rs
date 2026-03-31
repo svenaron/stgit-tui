@@ -437,6 +437,44 @@ pub fn git_push_force() -> Result<(bool, String, String)> {
     run_cmd_ok("git", &["push", "--force-with-lease"])
 }
 
+/// Apply a diff fragment via stdin to git apply
+pub fn git_apply(diff: &str, cached: bool, reverse: bool) -> Result<(bool, String, String)> {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let mut args = vec!["apply", "--unidiff-zero"];
+    if cached {
+        args.push("--cached");
+    }
+    if reverse {
+        args.push("--reverse");
+    }
+
+    let mut child = Command::new("git")
+        .args(&args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .with_context(|| "failed to run git apply")?;
+
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin
+            .write_all(diff.as_bytes())
+            .with_context(|| "failed to write to git apply stdin")?;
+    }
+
+    let output = child
+        .wait_with_output()
+        .with_context(|| "failed to wait for git apply")?;
+
+    Ok((
+        output.status.success(),
+        String::from_utf8_lossy(&output.stdout).to_string(),
+        String::from_utf8_lossy(&output.stderr).to_string(),
+    ))
+}
+
 pub fn stg_rebase(target: Option<&str>) -> Result<(bool, String, String)> {
     match target {
         Some(t) => run_cmd_ok("stg", &["rebase", t]),

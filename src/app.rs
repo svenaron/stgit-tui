@@ -15,15 +15,231 @@ pub enum InputAction {
     ConfirmForcePush,
 }
 
+/// Where the diff came from — needed to know how to stage/unstage
+#[derive(Debug, Clone)]
+pub enum DiffSource {
+    WorkTree { path: String },
+    Index { path: String },
+    Patch { name: String },
+}
+
+/// A parsed hunk from a unified diff
+#[derive(Debug, Clone)]
+pub struct DiffHunk {
+    /// Line index in the full diff where this hunk starts (the @@ line)
+    pub start_line: usize,
+    /// Line index where this hunk ends (exclusive)
+    pub end_line: usize,
+}
+
+/// State for the diff viewer with hunk awareness
+#[derive(Debug)]
+pub struct DiffViewState {
+    pub lines: Vec<String>,
+    /// The file header lines (diff --git, ---, +++) that precede hunks
+    pub file_headers: Vec<(usize, usize)>, // (start, end) pairs for each file's headers
+    pub hunks: Vec<DiffHunk>,
+    pub scroll: usize,
+    pub cursor: usize,
+    pub selection_anchor: Option<usize>,
+    pub title: String,
+    pub source: DiffSource,
+}
+
+impl DiffViewState {
+    pub fn from_diff(diff: &str, title: String, source: DiffSource) -> Self {
+        let lines: Vec<String> = diff.lines().map(|l| l.to_string()).collect();
+        let mut hunks = Vec::new();
+        let mut file_headers: Vec<(usize, usize)> = Vec::new();
+        let mut current_header_start: Option<usize> = None;
+
+        for (i, line) in lines.iter().enumerate() {
+            if line.starts_with("diff ") {
+                // Start of a new file section
+                current_header_start = Some(i);
+            } else if line.starts_with("@@") {
+                // End of file headers, start of a hunk
+                if let Some(hs) = current_header_start.take() {
+                    file_headers.push((hs, i));
+                }
+                let hunk_start = i;
+                // Find where this hunk ends
+                let hunk_end = lines[i + 1..]
+                    .iter()
+                    .position(|l| l.starts_with("@@") || l.starts_with("diff "))
+                    .map(|p| i + 1 + p)
+                    .unwrap_or(lines.len());
+                hunks.push(DiffHunk {
+                    start_line: hunk_start,
+                    end_line: hunk_end,
+                });
+            }
+        }
+
+        DiffViewState {
+            lines,
+            file_headers,
+            hunks,
+            scroll: 0,
+            cursor: 0,
+            selection_anchor: None,
+            title,
+            source,
+        }
+    }
+
+    /// Get the index of the hunk containing the cursor line
+    pub fn current_hunk_index(&self) -> Option<usize> {
+        self.hunks
+            .iter()
+            .position(|h| self.cursor >= h.start_line && self.cursor < h.end_line)
+    }
+
+    /// Get the selected line range (inclusive)
+    pub fn selection_range(&self) -> Option<(usize, usize)> {
+        self.selection_anchor.map(|anchor| {
+            let start = anchor.min(self.cursor);
+            let end = anchor.max(self.cursor);
+            (start, end)
+        })
+    }
+
+    /// Build a diff fragment for a single hunk, including file headers
+    pub fn hunk_diff(&self, hunk_idx: usize) -> Option<String> {
+        let hunk = self.hunks.get(hunk_idx)?;
+        let mut result = String::new();
+
+        // Find the file headers that apply to this hunk
+        for &(hs, he) in &self.file_headers {
+            if hs <= hunk.start_line {
+                result.clear(); // reset — use the most recent headers
+                for line in &self.lines[hs..he] {
+                    result.push_str(line);
+                    result.push('\n');
+                }
+            }
+        }
+
+        // Add hunk lines
+        for line in &self.lines[hunk.start_line..hunk.end_line] {
+            result.push_str(line);
+            result.push('\n');
+        }
+
+        Some(result)
+    }
+
+    /// Build a diff fragment for selected lines within a hunk
+    pub fn selection_diff(&self) -> Option<String> {
+        let (sel_start, sel_end) = self.selection_range()?;
+        let hunk_idx = self.current_hunk_index()?;
+        let hunk = &self.hunks[hunk_idx];
+
+        let mut result = String::new();
+
+        // File headers
+        for &(hs, he) in &self.file_headers {
+            if hs <= hunk.start_line {
+                result.clear();
+                for line in &self.lines[hs..he] {
+                    result.push_str(line);
+                    result.push('\n');
+                }
+            }
+        }
+
+        // Build a modified hunk that only includes selected +/- lines
+        // The @@ line needs to be recalculated
+        let hunk_header = &self.lines[hunk.start_line];
+
+        // Parse the original @@ header to get the starting line number
+        let (old_start, _old_count, new_start, _new_count) = parse_hunk_header(hunk_header);
+
+        let mut new_lines = Vec::new();
+        let mut old_line_count = 0u32;
+        let mut new_line_count = 0u32;
+
+        for i in (hunk.start_line + 1)..hunk.end_line {
+            let line = &self.lines[i];
+            let in_selection = i >= sel_start && i <= sel_end;
+            let first_char = line.chars().next().unwrap_or(' ');
+
+            match first_char {
+                '+' => {
+                    if in_selection {
+                        new_lines.push(line.clone());
+                        new_line_count += 1;
+                    }
+                    // If not selected, skip it entirely
+                }
+                '-' => {
+                    if in_selection {
+                        new_lines.push(line.clone());
+                        old_line_count += 1;
+                    } else {
+                        // Convert to context line (keep the line but as unchanged)
+                        new_lines.push(format!(" {}", &line[1..]));
+                        old_line_count += 1;
+                        new_line_count += 1;
+                    }
+                }
+                _ => {
+                    // Context line — always include
+                    new_lines.push(line.clone());
+                    old_line_count += 1;
+                    new_line_count += 1;
+                }
+            }
+        }
+
+        // Write the new @@ header
+        result.push_str(&format!(
+            "@@ -{},{} +{},{} @@\n",
+            old_start, old_line_count, new_start, new_line_count
+        ));
+
+        for line in &new_lines {
+            result.push_str(line);
+            result.push('\n');
+        }
+
+        Some(result)
+    }
+}
+
+fn parse_hunk_header(header: &str) -> (u32, u32, u32, u32) {
+    // Parse "@@ -old_start,old_count +new_start,new_count @@"
+    let parts: Vec<&str> = header.split_whitespace().collect();
+    let mut old_start = 1u32;
+    let mut old_count = 1u32;
+    let mut new_start = 1u32;
+    let mut new_count = 1u32;
+
+    if parts.len() >= 3 {
+        if let Some(old) = parts[1].strip_prefix('-') {
+            let nums: Vec<&str> = old.split(',').collect();
+            old_start = nums[0].parse().unwrap_or(1);
+            if nums.len() > 1 {
+                old_count = nums[1].parse().unwrap_or(1);
+            }
+        }
+        if let Some(new) = parts[2].strip_prefix('+') {
+            let nums: Vec<&str> = new.split(',').collect();
+            new_start = nums[0].parse().unwrap_or(1);
+            if nums.len() > 1 {
+                new_count = nums[1].parse().unwrap_or(1);
+            }
+        }
+    }
+
+    (old_start, old_count, new_start, new_count)
+}
+
 /// The current UI mode
 #[derive(Debug)]
 pub enum AppMode {
     Normal,
-    DiffView {
-        lines: Vec<String>,
-        scroll: usize,
-        title: String,
-    },
+    DiffView(DiffViewState),
     Input {
         prompt: String,
         value: String,

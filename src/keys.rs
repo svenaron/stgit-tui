@@ -1,6 +1,6 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use crate::app::{App, AppMode, InputAction, LineItem};
+use crate::app::{App, AppMode, DiffSource, DiffViewState, InputAction, LineItem};
 use crate::stgit::{self, PatchStatus};
 
 impl App {
@@ -28,39 +28,191 @@ impl App {
             KeyCode::Esc | KeyCode::Char('q') => {
                 self.mode = AppMode::Normal;
             }
+            // Cursor movement
             KeyCode::Down | KeyCode::Char('j') => {
-                if let AppMode::DiffView { scroll, lines, .. } = &mut self.mode {
-                    if *scroll + 1 < lines.len() {
-                        *scroll += 1;
+                if let AppMode::DiffView(dv) = &mut self.mode {
+                    if dv.cursor + 1 < dv.lines.len() {
+                        dv.cursor += 1;
                     }
+                    Self::scroll_to_cursor(dv);
                 }
             }
             KeyCode::Up | KeyCode::Char('k') => {
-                if let AppMode::DiffView { scroll, .. } = &mut self.mode {
-                    *scroll = scroll.saturating_sub(1);
+                if let AppMode::DiffView(dv) = &mut self.mode {
+                    dv.cursor = dv.cursor.saturating_sub(1);
+                    Self::scroll_to_cursor(dv);
                 }
             }
             KeyCode::PageDown => {
-                if let AppMode::DiffView { scroll, lines, .. } = &mut self.mode {
-                    *scroll = (*scroll + 20).min(lines.len().saturating_sub(1));
+                if let AppMode::DiffView(dv) = &mut self.mode {
+                    dv.cursor = (dv.cursor + 20).min(dv.lines.len().saturating_sub(1));
+                    Self::scroll_to_cursor(dv);
                 }
             }
             KeyCode::PageUp => {
-                if let AppMode::DiffView { scroll, .. } = &mut self.mode {
-                    *scroll = scroll.saturating_sub(20);
+                if let AppMode::DiffView(dv) = &mut self.mode {
+                    dv.cursor = dv.cursor.saturating_sub(20);
+                    Self::scroll_to_cursor(dv);
                 }
             }
             KeyCode::Home => {
-                if let AppMode::DiffView { scroll, .. } = &mut self.mode {
-                    *scroll = 0;
+                if let AppMode::DiffView(dv) = &mut self.mode {
+                    dv.cursor = 0;
+                    dv.scroll = 0;
                 }
             }
             KeyCode::End => {
-                if let AppMode::DiffView { scroll, lines, .. } = &mut self.mode {
-                    *scroll = lines.len().saturating_sub(1);
+                if let AppMode::DiffView(dv) = &mut self.mode {
+                    dv.cursor = dv.lines.len().saturating_sub(1);
+                    Self::scroll_to_cursor(dv);
                 }
             }
+
+            // Hunk navigation
+            KeyCode::Char('n') => {
+                if let AppMode::DiffView(dv) = &mut self.mode {
+                    let current = dv.current_hunk_index();
+                    let next = current.map(|i| i + 1).unwrap_or(0);
+                    if let Some(hunk) = dv.hunks.get(next) {
+                        dv.cursor = hunk.start_line;
+                        dv.selection_anchor = None;
+                        Self::scroll_to_cursor(dv);
+                    }
+                }
+            }
+            KeyCode::Char('p') => {
+                if let AppMode::DiffView(dv) = &mut self.mode {
+                    let current = dv.current_hunk_index().unwrap_or(0);
+                    let prev = current.saturating_sub(1);
+                    if let Some(hunk) = dv.hunks.get(prev) {
+                        dv.cursor = hunk.start_line;
+                        dv.selection_anchor = None;
+                        Self::scroll_to_cursor(dv);
+                    }
+                }
+            }
+
+            // Selection toggle (v to start/stop selection)
+            KeyCode::Char('v') => {
+                if let AppMode::DiffView(dv) = &mut self.mode {
+                    if dv.selection_anchor.is_some() {
+                        dv.selection_anchor = None;
+                    } else {
+                        dv.selection_anchor = Some(dv.cursor);
+                    }
+                }
+            }
+
+            // Stage hunk or selection
+            KeyCode::Char('s') => {
+                self.diff_apply(false, false);
+            }
+            // Unstage hunk or selection
+            KeyCode::Char('u') => {
+                self.diff_apply(true, true);
+            }
+            // Revert hunk in worktree
+            KeyCode::Char('r') => {
+                self.diff_apply(false, true);
+            }
+
             _ => {}
+        }
+    }
+
+    fn scroll_to_cursor(dv: &mut DiffViewState) {
+        // Keep cursor visible (assuming ~40 line viewport, we'll use scroll offset)
+        if dv.cursor < dv.scroll {
+            dv.scroll = dv.cursor;
+        }
+        // We don't know the viewport height here, but we'll ensure scroll <= cursor
+        // The UI will handle the other direction
+    }
+
+    fn diff_apply(&mut self, cached: bool, reverse: bool) {
+        let (diff_fragment, source) = if let AppMode::DiffView(dv) = &self.mode {
+            let fragment = if dv.selection_anchor.is_some() {
+                dv.selection_diff()
+            } else {
+                dv.current_hunk_index().and_then(|i| dv.hunk_diff(i))
+            };
+            (fragment, dv.source.clone())
+        } else {
+            return;
+        };
+
+        let Some(diff) = diff_fragment else {
+            self.status_msg = "No hunk at cursor".to_string();
+            return;
+        };
+
+        // Determine flags based on source and operation
+        let (use_cached, use_reverse) = match &source {
+            DiffSource::WorkTree { .. } => (cached, reverse),
+            DiffSource::Index { .. } => (true, reverse),
+            DiffSource::Patch { .. } => {
+                self.status_msg = "Cannot stage/unstage patch hunks".to_string();
+                return;
+            }
+        };
+
+        let result = stgit::git_apply(&diff, use_cached, use_reverse);
+        match result {
+            Ok((true, _, _)) => {
+                self.status_msg = "Applied".to_string();
+                // Clear selection
+                if let AppMode::DiffView(dv) = &mut self.mode {
+                    dv.selection_anchor = None;
+                }
+                // Refresh the diff view
+                self.refresh_diff_view();
+            }
+            Ok((false, _, stderr)) => {
+                self.status_msg =
+                    format!("Error: {}", stderr.lines().next().unwrap_or("apply failed"));
+            }
+            Err(e) => {
+                self.status_msg = format!("Error: {e}");
+            }
+        }
+    }
+
+    fn refresh_diff_view(&mut self) {
+        let (source, old_cursor) = if let AppMode::DiffView(dv) = &self.mode {
+            (dv.source.clone(), dv.cursor)
+        } else {
+            return;
+        };
+
+        let result = match &source {
+            DiffSource::WorkTree { path } => {
+                stgit::git_diff(path, false).map(|d| (d, format!("WorkTree: {path}")))
+            }
+            DiffSource::Index { path } => {
+                stgit::git_diff(path, true).map(|d| (d, format!("Index: {path}")))
+            }
+            DiffSource::Patch { name } => {
+                stgit::stg_diff(name).map(|d| (d, format!("Patch: {name}")))
+            }
+        };
+
+        match result {
+            Ok((diff, title)) => {
+                if diff.trim().is_empty() {
+                    self.mode = AppMode::Normal;
+                    self.status_msg = "Diff is now empty".to_string();
+                    self.reload();
+                } else {
+                    let mut dv = DiffViewState::from_diff(&diff, title, source);
+                    dv.cursor = old_cursor.min(dv.lines.len().saturating_sub(1));
+                    Self::scroll_to_cursor(&mut dv);
+                    self.mode = AppMode::DiffView(dv);
+                }
+            }
+            Err(e) => {
+                self.mode = AppMode::Normal;
+                self.status_msg = format!("Error refreshing: {e}");
+            }
         }
     }
 
@@ -512,30 +664,28 @@ impl App {
         let result = match self.current_line().clone() {
             LineItem::Patch(i) | LineItem::PatchFile(i, _) => {
                 let name = self.state.patches[i].name.clone();
-                stgit::stg_diff(&name).map(|d| (d, format!("Patch: {name}")))
+                let source = DiffSource::Patch { name: name.clone() };
+                stgit::stg_diff(&name).map(|d| (d, format!("Patch: {name}"), source))
             }
             LineItem::IndexFile(i) => {
                 let path = self.state.index_files[i].path.clone();
-                stgit::git_diff(&path, true).map(|d| (d, format!("Index: {path}")))
+                let source = DiffSource::Index { path: path.clone() };
+                stgit::git_diff(&path, true).map(|d| (d, format!("Index: {path}"), source))
             }
             LineItem::WorkTreeFile(i) => {
                 let path = self.state.worktree_files[i].path.clone();
-                stgit::git_diff(&path, false).map(|d| (d, format!("WorkTree: {path}")))
+                let source = DiffSource::WorkTree { path: path.clone() };
+                stgit::git_diff(&path, false).map(|d| (d, format!("WorkTree: {path}"), source))
             }
             _ => return,
         };
 
         match result {
-            Ok((diff, title)) => {
-                let lines: Vec<String> = diff.lines().map(|l| l.to_string()).collect();
-                if lines.is_empty() {
+            Ok((diff, title, source)) => {
+                if diff.trim().is_empty() {
                     self.status_msg = "No diff to show".to_string();
                 } else {
-                    self.mode = AppMode::DiffView {
-                        lines,
-                        scroll: 0,
-                        title,
-                    };
+                    self.mode = AppMode::DiffView(DiffViewState::from_diff(&diff, title, source));
                 }
             }
             Err(e) => {

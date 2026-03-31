@@ -3,17 +3,13 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, Wrap},
 };
 
-use crate::app::{App, AppMode, LineItem};
+use crate::app::{App, AppMode, DiffSource, DiffViewState, LineItem};
 use crate::stgit::{FileStatus, PatchStatus};
 
 pub fn draw(f: &mut Frame, app: &App) {
     match &app.mode {
         AppMode::Normal => draw_normal(f, app),
-        AppMode::DiffView {
-            lines,
-            scroll,
-            title,
-        } => draw_diff(f, lines, *scroll, title),
+        AppMode::DiffView(dv) => draw_diff(f, dv),
         AppMode::Input {
             prompt,
             value,
@@ -67,7 +63,7 @@ fn draw_normal(f: &mut Frame, app: &App) {
     f.render_widget(status, status_area);
 }
 
-fn draw_diff(f: &mut Frame, lines: &[String], scroll: usize, title: &str) {
+fn draw_diff(f: &mut Frame, dv: &DiffViewState) {
     let area = f.area();
 
     let chunks = Layout::default()
@@ -77,21 +73,48 @@ fn draw_diff(f: &mut Frame, lines: &[String], scroll: usize, title: &str) {
 
     let main_area = chunks[0];
     let status_area = chunks[1];
+    let visible_height = main_area.height as usize;
 
-    let text_lines: Vec<Line> = lines
+    // Adjust scroll to keep cursor visible
+    let scroll = if dv.cursor >= dv.scroll + visible_height {
+        dv.cursor - visible_height + 1
+    } else if dv.cursor < dv.scroll {
+        dv.cursor
+    } else {
+        dv.scroll
+    };
+
+    let selection = dv.selection_range();
+    let current_hunk = dv.current_hunk_index();
+
+    let text_lines: Vec<Line> = dv
+        .lines
         .iter()
-        .map(|l| {
-            let style = if l.starts_with('+') && !l.starts_with("+++") {
-                Style::default().fg(Color::Green)
-            } else if l.starts_with('-') && !l.starts_with("---") {
-                Style::default().fg(Color::Red)
-            } else if l.starts_with("@@") {
-                Style::default().fg(Color::Cyan)
-            } else if l.starts_with("diff ") || l.starts_with("---") || l.starts_with("+++") {
-                Style::default().fg(Color::White).bold()
-            } else {
-                Style::default()
-            };
+        .enumerate()
+        .map(|(i, l)| {
+            let is_cursor = i == dv.cursor;
+            let in_selection = selection.is_some_and(|(s, e)| i >= s && i <= e);
+            let in_current_hunk = current_hunk
+                .and_then(|hi| dv.hunks.get(hi))
+                .is_some_and(|h| i >= h.start_line && i < h.end_line);
+
+            let mut style = diff_line_style(l);
+
+            // Highlight current hunk with a subtle background
+            if in_current_hunk && !is_cursor && !in_selection {
+                style = style.bg(Color::Rgb(25, 25, 35));
+            }
+
+            // Selection highlight
+            if in_selection && !is_cursor {
+                style = style.bg(Color::Rgb(50, 50, 80));
+            }
+
+            // Cursor
+            if is_cursor {
+                style = style.add_modifier(Modifier::REVERSED);
+            }
+
             Line::from(Span::styled(l.clone(), style))
         })
         .collect();
@@ -102,13 +125,44 @@ fn draw_diff(f: &mut Frame, lines: &[String], scroll: usize, title: &str) {
 
     f.render_widget(paragraph, main_area);
 
+    // Status bar with context-sensitive hints
+    let can_stage = !matches!(dv.source, DiffSource::Patch { .. });
+    let hints = if can_stage {
+        if dv.selection_anchor.is_some() {
+            "  q:close n/p:hunk j/k:move v:end-sel s:stage u:unstage r:revert"
+        } else {
+            "  q:close n/p:hunk j/k:move v:select s:stage u:unstage r:revert"
+        }
+    } else {
+        "  q:close n/p:hunk j/k:scroll"
+    };
+
+    let hunk_info = current_hunk
+        .map(|i| format!(" [{}/{}]", i + 1, dv.hunks.len()))
+        .unwrap_or_default();
+
     let status = Paragraph::new(Line::from(vec![
-        Span::styled(title, Style::default().fg(Color::Cyan).bold()),
-        Span::styled("  q:close j/k:scroll", Style::default().fg(Color::DarkGray)),
+        Span::styled(&dv.title, Style::default().fg(Color::Cyan).bold()),
+        Span::styled(hunk_info, Style::default().fg(Color::Yellow)),
+        Span::styled(hints, Style::default().fg(Color::DarkGray)),
     ]))
     .style(Style::default().bg(Color::DarkGray));
 
     f.render_widget(status, status_area);
+}
+
+fn diff_line_style(line: &str) -> Style {
+    if line.starts_with('+') && !line.starts_with("+++") {
+        Style::default().fg(Color::Green)
+    } else if line.starts_with('-') && !line.starts_with("---") {
+        Style::default().fg(Color::Red)
+    } else if line.starts_with("@@") {
+        Style::default().fg(Color::Cyan)
+    } else if line.starts_with("diff ") || line.starts_with("---") || line.starts_with("+++") {
+        Style::default().fg(Color::White).bold()
+    } else {
+        Style::default()
+    }
 }
 
 fn draw_input_overlay(f: &mut Frame, prompt: &str, value: &str) {
@@ -180,6 +234,14 @@ fn draw_help(f: &mut Frame) {
         "    f               Git fetch",
         "    p               Git push (with confirmation)",
         "    F               Force push (with confirmation)",
+        "",
+        "  Diff View (from = key)",
+        "    n/p             Next/previous hunk",
+        "    v               Start/end line selection",
+        "    s               Stage hunk or selection",
+        "    u               Unstage hunk or selection",
+        "    r               Revert hunk or selection",
+        "    q               Close diff",
         "",
         "  View & Settings",
         "    =               Show diff",
