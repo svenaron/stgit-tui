@@ -10,7 +10,6 @@ impl App {
             AppMode::DiffView { .. } => self.handle_diff_key(key),
             AppMode::Input { .. } => self.handle_input_key(key),
             AppMode::Help => self.handle_help_key(key),
-            AppMode::BranchList { .. } => self.handle_branch_list_key(key),
         }
     }
 
@@ -234,80 +233,61 @@ impl App {
                 if let AppMode::Input {
                     value,
                     completion_idx,
+                    filter_text,
                     ..
                 } = &mut self.mode
                 {
                     value.pop();
                     *completion_idx = None;
+                    *filter_text = None;
                 }
             }
-            KeyCode::Tab => {
-                // Cycle through matching completions
+            KeyCode::Tab | KeyCode::BackTab => {
+                let forward = key.code == KeyCode::Tab;
                 if let AppMode::Input {
                     value,
                     completions,
                     completion_idx,
+                    filter_text,
                     ..
                 } = &mut self.mode
                 {
+                    // On first Tab, save what the user typed as the filter
+                    let query = filter_text.get_or_insert_with(|| value.clone());
+                    let query_lower = query.to_lowercase();
+
                     let matches: Vec<usize> = completions
                         .iter()
                         .enumerate()
                         .filter(|(_, c)| {
-                            c.to_lowercase().contains(&value.to_lowercase()) || value.is_empty()
+                            query.is_empty() || c.to_lowercase().contains(&query_lower)
                         })
                         .map(|(i, _)| i)
                         .collect();
 
                     if !matches.is_empty() {
-                        let next = match completion_idx {
-                            Some(current) => {
-                                // Find next match after current
+                        let pick = match completion_idx {
+                            Some(current) => if forward {
+                                matches.iter().find(|&&i| i > *current).or(matches.first())
+                            } else {
                                 matches
                                     .iter()
-                                    .find(|&&i| i > *current)
-                                    .or(matches.first())
-                                    .copied()
-                                    .unwrap()
+                                    .rev()
+                                    .find(|&&i| i < *current)
+                                    .or(matches.last())
                             }
-                            None => matches[0],
+                            .copied()
+                            .unwrap(),
+                            None => {
+                                if forward {
+                                    matches[0]
+                                } else {
+                                    *matches.last().unwrap()
+                                }
+                            }
                         };
-                        *value = completions[next].clone();
-                        *completion_idx = Some(next);
-                    }
-                }
-            }
-            KeyCode::BackTab => {
-                // Cycle backwards through completions
-                if let AppMode::Input {
-                    value,
-                    completions,
-                    completion_idx,
-                    ..
-                } = &mut self.mode
-                {
-                    let matches: Vec<usize> = completions
-                        .iter()
-                        .enumerate()
-                        .filter(|(_, c)| {
-                            c.to_lowercase().contains(&value.to_lowercase()) || value.is_empty()
-                        })
-                        .map(|(i, _)| i)
-                        .collect();
-
-                    if !matches.is_empty() {
-                        let prev = match completion_idx {
-                            Some(current) => matches
-                                .iter()
-                                .rev()
-                                .find(|&&i| i < *current)
-                                .or(matches.last())
-                                .copied()
-                                .unwrap(),
-                            None => *matches.last().unwrap(),
-                        };
-                        *value = completions[prev].clone();
-                        *completion_idx = Some(prev);
+                        *value = completions[pick].clone();
+                        *completion_idx = Some(pick);
                     }
                 }
             }
@@ -315,11 +295,13 @@ impl App {
                 if let AppMode::Input {
                     value,
                     completion_idx,
+                    filter_text,
                     ..
                 } = &mut self.mode
                 {
                     value.push(c);
                     *completion_idx = None;
+                    *filter_text = None;
                 }
             }
             _ => {}
@@ -349,12 +331,6 @@ impl App {
                     self.status_msg = "Invalid number".to_string();
                 }
             }
-            InputAction::BranchCreate => {
-                if !value.is_empty() {
-                    let result = stgit::stg_branch_create(value);
-                    self.run_op(result);
-                }
-            }
             InputAction::ConfirmPush => {
                 if value == "y" || value == "Y" {
                     let result = stgit::git_push();
@@ -373,48 +349,12 @@ impl App {
                     self.run_op(result);
                 }
             }
-        }
-    }
-
-    fn handle_branch_list_key(&mut self, key: KeyEvent) {
-        match key.code {
-            KeyCode::Esc | KeyCode::Char('q') => {
-                self.mode = AppMode::Normal;
-            }
-            KeyCode::Up | KeyCode::Char('k') => {
-                if let AppMode::BranchList { selected, .. } = &mut self.mode {
-                    *selected = selected.saturating_sub(1);
-                }
-            }
-            KeyCode::Down | KeyCode::Char('j') => {
-                if let AppMode::BranchList {
-                    selected, branches, ..
-                } = &mut self.mode
-                {
-                    if *selected + 1 < branches.len() {
-                        *selected += 1;
-                    }
-                }
-            }
-            KeyCode::Enter => {
-                let name = if let AppMode::BranchList {
-                    selected, branches, ..
-                } = &self.mode
-                {
-                    branches.get(*selected).cloned()
-                } else {
-                    None
-                };
-                self.mode = AppMode::Normal;
-                if let Some(name) = name {
-                    let result = stgit::stg_branch_switch(&name);
+            InputAction::BranchSwitch => {
+                if !value.is_empty() {
+                    let result = stgit::stg_branch_switch(value);
                     self.run_op(result);
                 }
             }
-            KeyCode::Char('n') => {
-                self.mode = AppMode::input("New branch name: ", InputAction::BranchCreate);
-            }
-            _ => {}
         }
     }
 
@@ -658,18 +598,16 @@ impl App {
                 self.open_diff_view();
             }
 
-            // Branch list
-            (KeyModifiers::NONE, KeyCode::Char('b')) => match stgit::stg_branch_list() {
-                Ok(branches) => {
-                    self.mode = AppMode::BranchList {
-                        branches,
-                        selected: 0,
-                    };
-                }
-                Err(e) => {
-                    self.status_msg = format!("Error: {e}");
-                }
-            },
+            // Switch branch
+            (KeyModifiers::NONE, KeyCode::Char('b')) => {
+                let branches = stgit::stg_branch_list().unwrap_or_default();
+                self.mode = AppMode::input_with_completions(
+                    "Switch branch: ",
+                    "",
+                    InputAction::BranchSwitch,
+                    branches,
+                );
+            }
 
             // Fetch
             (KeyModifiers::NONE, KeyCode::Char('f')) => {

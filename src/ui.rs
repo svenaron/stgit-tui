@@ -14,13 +14,14 @@ pub fn draw(f: &mut Frame, app: &App) {
             prompt,
             value,
             completions,
+            filter_text,
             ..
         } => {
             draw_normal(f, app);
-            draw_input_overlay(f, prompt, value, completions);
+            let query = filter_text.as_deref().unwrap_or(value);
+            draw_input_overlay(f, prompt, value, completions, query);
         }
         AppMode::Help => draw_help(f),
-        AppMode::BranchList { branches, selected } => draw_branch_list(f, branches, *selected),
     }
 }
 
@@ -166,19 +167,25 @@ fn diff_line_style(line: &str) -> Style {
     }
 }
 
-fn draw_input_overlay(f: &mut Frame, prompt: &str, value: &str, completions: &[String]) {
+fn draw_input_overlay(
+    f: &mut Frame,
+    prompt: &str,
+    value: &str,
+    completions: &[String],
+    query: &str,
+) {
     let area = f.area();
 
-    // Filter completions that match current input
-    let filtered: Vec<&String> = if completions.is_empty() || value.is_empty() {
+    // Filter completions that match the query (what the user typed, not the completed value)
+    let filtered: Vec<&String> = if completions.is_empty() || query.is_empty() {
         Vec::new()
     } else {
+        let ql = query.to_lowercase();
         completions
             .iter()
             .filter(|c| {
                 let cl = c.to_lowercase();
-                let vl = value.to_lowercase();
-                cl.contains(&vl) && cl != vl
+                cl.contains(&ql) && cl != value.to_lowercase()
             })
             .take(5)
             .collect()
@@ -272,7 +279,7 @@ fn draw_help(f: &mut Frame) {
         "    R               Resolve conflict",
         "",
         "  Branch & Remote",
-        "    b               Switch branch",
+        "    b               Switch branch (Tab to complete)",
         "    B               Rebase onto upstream",
         "    f               Git fetch",
         "    p               Git push (with confirmation)",
@@ -313,50 +320,6 @@ fn draw_help(f: &mut Frame) {
 
     let status = Paragraph::new(Line::from(vec![Span::styled(
         "  Press q or ? to close",
-        Style::default().fg(Color::DarkGray),
-    )]))
-    .style(Style::default().bg(Color::DarkGray));
-
-    f.render_widget(status, chunks[1]);
-}
-
-fn draw_branch_list(f: &mut Frame, branches: &[String], selected: usize) {
-    let area = f.area();
-
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(1), Constraint::Length(1)])
-        .split(area);
-
-    let mut text_lines: Vec<Line> = vec![
-        Line::from(Span::styled(
-            "  Switch Branch",
-            Style::default().fg(Color::Cyan).bold(),
-        )),
-        Line::from(""),
-    ];
-
-    for (i, branch) in branches.iter().enumerate() {
-        let is_selected = i == selected;
-        let prefix = if is_selected { "  > " } else { "    " };
-        let style = if is_selected {
-            Style::default()
-                .fg(Color::White)
-                .bg(Color::Rgb(40, 40, 60))
-                .bold()
-        } else {
-            Style::default().fg(Color::White)
-        };
-        text_lines.push(Line::from(Span::styled(format!("{prefix}{branch}"), style)));
-    }
-
-    let paragraph =
-        Paragraph::new(Text::from(text_lines)).block(Block::default().borders(Borders::NONE));
-
-    f.render_widget(paragraph, chunks[0]);
-
-    let status = Paragraph::new(Line::from(vec![Span::styled(
-        "  Enter:switch  n:new branch  q:cancel",
         Style::default().fg(Color::DarkGray),
     )]))
     .style(Style::default().bg(Color::DarkGray));

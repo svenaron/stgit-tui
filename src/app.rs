@@ -10,10 +10,10 @@ pub enum InputAction {
     NewPatch,
     CreatePatchFromChanges,
     HistorySize,
-    BranchCreate,
     ConfirmPush,
     ConfirmForcePush,
     Rebase,
+    BranchSwitch,
 }
 
 /// Where the diff came from — needed to know how to stage/unstage
@@ -249,12 +249,10 @@ pub enum AppMode {
         completions: Vec<String>,
         /// Currently selected completion index
         completion_idx: Option<usize>,
+        /// The text the user typed before Tab-completing (used for filtering)
+        filter_text: Option<String>,
     },
     Help,
-    BranchList {
-        branches: Vec<String>,
-        selected: usize,
-    },
 }
 
 impl AppMode {
@@ -265,6 +263,7 @@ impl AppMode {
             action,
             completions: Vec::new(),
             completion_idx: None,
+            filter_text: None,
         }
     }
 
@@ -280,6 +279,7 @@ impl AppMode {
             action,
             completions,
             completion_idx: None,
+            filter_text: None,
         }
     }
 }
