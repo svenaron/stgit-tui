@@ -1,6 +1,6 @@
 use ratatui::{
     prelude::*,
-    widgets::{Block, Borders, Paragraph, Wrap},
+    widgets::{Block, Borders, Clear, Paragraph, Wrap},
 };
 
 use crate::app::{App, AppMode, DiffSource, DiffViewState, LineItem};
@@ -195,6 +195,15 @@ fn draw_input_overlay(
     let total_height = 1 + suggestion_height;
     let start_y = area.y + area.height.saturating_sub(total_height);
 
+    // Clear the entire overlay area first to prevent bleed-through
+    let overlay_area = Rect {
+        x: area.x,
+        y: start_y,
+        width: area.width,
+        height: total_height,
+    };
+    f.render_widget(Clear, overlay_area);
+
     // Draw suggestion lines above the input
     for (i, suggestion) in filtered.iter().enumerate() {
         let suggestion_area = Rect {
@@ -219,21 +228,20 @@ fn draw_input_overlay(
         height: 1,
     };
 
-    let tab_hint = if !completions.is_empty() {
-        Span::styled("  [Tab: complete]", Style::default().fg(Color::DarkGray))
-    } else {
-        Span::default()
-    };
-
     let input_line = Paragraph::new(Line::from(vec![
         Span::styled(prompt, Style::default().fg(Color::Cyan).bold()),
         Span::styled(value, Style::default().fg(Color::White)),
-        Span::styled("_", Style::default().fg(Color::White)),
-        tab_hint,
     ]))
     .style(Style::default().bg(Color::DarkGray));
 
     f.render_widget(input_line, status_area);
+
+    // Place the terminal cursor after the value
+    let cursor_x = status_area.x + prompt.len() as u16 + value.len() as u16;
+    let cursor_y = status_area.y;
+    if cursor_x < status_area.x + status_area.width {
+        f.set_cursor_position((cursor_x, cursor_y));
+    }
 }
 
 fn draw_help(f: &mut Frame) {
