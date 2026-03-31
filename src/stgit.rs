@@ -419,3 +419,53 @@ pub fn stg_diff(patch: &str) -> Result<String> {
 pub fn git_resolve(path: &str) -> Result<(bool, String, String)> {
     run_cmd_ok("git", &["add", path])
 }
+
+// --- Branch operations ---
+
+pub fn stg_branch_list() -> Result<Vec<String>> {
+    let output = run_cmd("stg", &["branch", "--list"])?;
+    Ok(output
+        .lines()
+        .filter_map(|l| {
+            let trimmed = l.trim();
+            // stg branch --list format: "s branch | description"
+            // where s is ' ' or '>' for current
+            let name = trimmed.trim_start_matches('>').trim();
+            let name = name.split('|').next().unwrap_or("").trim();
+            if name.is_empty() {
+                None
+            } else {
+                Some(name.to_string())
+            }
+        })
+        .collect())
+}
+
+pub fn stg_branch_switch(name: &str) -> Result<(bool, String, String)> {
+    run_cmd_ok("stg", &["branch", name])
+}
+
+pub fn stg_branch_create(name: &str) -> Result<(bool, String, String)> {
+    run_cmd_ok("stg", &["branch", "--create", name])
+}
+
+// --- Remote operations ---
+
+pub fn git_fetch() -> Result<(bool, String, String)> {
+    run_cmd_ok("git", &["fetch"])
+}
+
+pub fn git_push() -> Result<(bool, String, String)> {
+    run_cmd_ok("git", &["push"])
+}
+
+pub fn git_push_force() -> Result<(bool, String, String)> {
+    run_cmd_ok("git", &["push", "--force-with-lease"])
+}
+
+pub fn stg_rebase(target: Option<&str>) -> Result<(bool, String, String)> {
+    match target {
+        Some(t) => run_cmd_ok("stg", &["rebase", t]),
+        None => run_cmd_ok("stg", &["rebase"]),
+    }
+}

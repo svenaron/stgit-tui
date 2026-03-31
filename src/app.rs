@@ -10,6 +10,9 @@ pub enum InputAction {
     NewPatch,
     CreatePatchFromChanges,
     HistorySize,
+    BranchCreate,
+    ConfirmPush,
+    ConfirmForcePush,
 }
 
 /// The current UI mode
@@ -27,6 +30,10 @@ pub enum AppMode {
         action: InputAction,
     },
     Help,
+    BranchList {
+        branches: Vec<String>,
+        selected: usize,
+    },
 }
 
 /// What kind of line the cursor is on

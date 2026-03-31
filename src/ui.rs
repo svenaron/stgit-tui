@@ -23,6 +23,7 @@ pub fn draw(f: &mut Frame, app: &App) {
             draw_input_overlay(f, prompt, value);
         }
         AppMode::Help => draw_help(f),
+        AppMode::BranchList { branches, selected } => draw_branch_list(f, branches, *selected),
     }
 }
 
@@ -173,6 +174,13 @@ fn draw_help(f: &mut Frame) {
         "    U               Revert file",
         "    R               Resolve conflict",
         "",
+        "  Branch & Remote",
+        "    b               Switch branch",
+        "    B               Rebase onto upstream",
+        "    f               Git fetch",
+        "    p               Git push (with confirmation)",
+        "    F               Force push (with confirmation)",
+        "",
         "  View & Settings",
         "    =               Show diff",
         "    t               Toggle untracked files",
@@ -200,6 +208,50 @@ fn draw_help(f: &mut Frame) {
 
     let status = Paragraph::new(Line::from(vec![Span::styled(
         "  Press q or ? to close",
+        Style::default().fg(Color::DarkGray),
+    )]))
+    .style(Style::default().bg(Color::DarkGray));
+
+    f.render_widget(status, chunks[1]);
+}
+
+fn draw_branch_list(f: &mut Frame, branches: &[String], selected: usize) {
+    let area = f.area();
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(1), Constraint::Length(1)])
+        .split(area);
+
+    let mut text_lines: Vec<Line> = vec![
+        Line::from(Span::styled(
+            "  Switch Branch",
+            Style::default().fg(Color::Cyan).bold(),
+        )),
+        Line::from(""),
+    ];
+
+    for (i, branch) in branches.iter().enumerate() {
+        let is_selected = i == selected;
+        let prefix = if is_selected { "  > " } else { "    " };
+        let style = if is_selected {
+            Style::default()
+                .fg(Color::White)
+                .bg(Color::Rgb(40, 40, 60))
+                .bold()
+        } else {
+            Style::default().fg(Color::White)
+        };
+        text_lines.push(Line::from(Span::styled(format!("{prefix}{branch}"), style)));
+    }
+
+    let paragraph =
+        Paragraph::new(Text::from(text_lines)).block(Block::default().borders(Borders::NONE));
+
+    f.render_widget(paragraph, chunks[0]);
+
+    let status = Paragraph::new(Line::from(vec![Span::styled(
+        "  Enter:switch  n:new branch  q:cancel",
         Style::default().fg(Color::DarkGray),
     )]))
     .style(Style::default().bg(Color::DarkGray));

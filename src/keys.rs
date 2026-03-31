@@ -10,6 +10,7 @@ impl App {
             AppMode::DiffView { .. } => self.handle_diff_key(key),
             AppMode::Input { .. } => self.handle_input_key(key),
             AppMode::Help => self.handle_help_key(key),
+            AppMode::BranchList { .. } => self.handle_branch_list_key(key),
         }
     }
 
@@ -115,6 +116,70 @@ impl App {
                     self.status_msg = "Invalid number".to_string();
                 }
             }
+            InputAction::BranchCreate => {
+                if !value.is_empty() {
+                    let result = stgit::stg_branch_create(value);
+                    self.run_op(result);
+                }
+            }
+            InputAction::ConfirmPush => {
+                if value == "y" || value == "Y" {
+                    let result = stgit::git_push();
+                    self.run_op(result);
+                }
+            }
+            InputAction::ConfirmForcePush => {
+                if value == "y" || value == "Y" {
+                    let result = stgit::git_push_force();
+                    self.run_op(result);
+                }
+            }
+        }
+    }
+
+    fn handle_branch_list_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => {
+                self.mode = AppMode::Normal;
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                if let AppMode::BranchList { selected, .. } = &mut self.mode {
+                    *selected = selected.saturating_sub(1);
+                }
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if let AppMode::BranchList {
+                    selected, branches, ..
+                } = &mut self.mode
+                {
+                    if *selected + 1 < branches.len() {
+                        *selected += 1;
+                    }
+                }
+            }
+            KeyCode::Enter => {
+                let name = if let AppMode::BranchList {
+                    selected, branches, ..
+                } = &self.mode
+                {
+                    branches.get(*selected).cloned()
+                } else {
+                    None
+                };
+                self.mode = AppMode::Normal;
+                if let Some(name) = name {
+                    let result = stgit::stg_branch_switch(&name);
+                    self.run_op(result);
+                }
+            }
+            KeyCode::Char('n') => {
+                self.mode = AppMode::Input {
+                    prompt: "New branch name: ".to_string(),
+                    value: String::new(),
+                    action: InputAction::BranchCreate,
+                };
+            }
+            _ => {}
         }
     }
 
@@ -364,6 +429,48 @@ impl App {
             // Show diff
             (KeyModifiers::NONE, KeyCode::Char('=')) => {
                 self.open_diff_view();
+            }
+
+            // Branch list
+            (KeyModifiers::NONE, KeyCode::Char('b')) => match stgit::stg_branch_list() {
+                Ok(branches) => {
+                    self.mode = AppMode::BranchList {
+                        branches,
+                        selected: 0,
+                    };
+                }
+                Err(e) => {
+                    self.status_msg = format!("Error: {e}");
+                }
+            },
+
+            // Fetch
+            (KeyModifiers::NONE, KeyCode::Char('f')) => {
+                self.status_msg = "Fetching...".to_string();
+                let result = stgit::git_fetch();
+                self.run_op(result);
+            }
+
+            // Push (with confirmation)
+            (KeyModifiers::NONE, KeyCode::Char('p')) => {
+                self.mode = AppMode::Input {
+                    prompt: "Push to remote? (y/n): ".to_string(),
+                    value: String::new(),
+                    action: InputAction::ConfirmPush,
+                };
+            }
+            (KeyModifiers::SHIFT, KeyCode::Char('F')) => {
+                self.mode = AppMode::Input {
+                    prompt: "Force push? (y/n): ".to_string(),
+                    value: String::new(),
+                    action: InputAction::ConfirmForcePush,
+                };
+            }
+
+            // Rebase
+            (KeyModifiers::SHIFT, KeyCode::Char('B')) => {
+                let result = stgit::stg_rebase(None);
+                self.run_op(result);
             }
 
             // Help
