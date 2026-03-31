@@ -1,15 +1,34 @@
 use ratatui::{
     prelude::*,
-    widgets::{Block, Borders, Paragraph},
+    widgets::{Block, Borders, Paragraph, Wrap},
 };
 
-use crate::app::{App, LineItem};
+use crate::app::{App, AppMode, LineItem};
 use crate::stgit::{FileStatus, PatchStatus};
 
 pub fn draw(f: &mut Frame, app: &App) {
+    match &app.mode {
+        AppMode::Normal => draw_normal(f, app),
+        AppMode::DiffView {
+            lines,
+            scroll,
+            title,
+        } => draw_diff(f, lines, *scroll, title),
+        AppMode::Input {
+            prompt,
+            value,
+            action: _,
+        } => {
+            draw_normal(f, app);
+            draw_input_overlay(f, prompt, value);
+        }
+        AppMode::Help => draw_help(f),
+    }
+}
+
+fn draw_normal(f: &mut Frame, app: &App) {
     let area = f.area();
 
-    // Main area + status line
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(1), Constraint::Length(1)])
@@ -18,16 +37,13 @@ pub fn draw(f: &mut Frame, app: &App) {
     let main_area = chunks[0];
     let status_area = chunks[1];
 
-    // Build styled lines
     let mut text_lines: Vec<Line> = Vec::new();
-
     for (line_idx, item) in app.lines.iter().enumerate() {
         let is_cursor = line_idx == app.cursor;
         let line = render_line(app, item, is_cursor);
         text_lines.push(line);
     }
 
-    // Calculate scroll offset to keep cursor visible
     let visible_height = main_area.height as usize;
     let scroll_offset = if app.cursor >= visible_height {
         app.cursor - visible_height + 1
@@ -41,7 +57,6 @@ pub fn draw(f: &mut Frame, app: &App) {
 
     f.render_widget(paragraph, main_area);
 
-    // Status line
     let status = Paragraph::new(Line::from(vec![Span::styled(
         &app.status_msg,
         Style::default().fg(Color::Yellow),
@@ -49,6 +64,147 @@ pub fn draw(f: &mut Frame, app: &App) {
     .style(Style::default().bg(Color::DarkGray));
 
     f.render_widget(status, status_area);
+}
+
+fn draw_diff(f: &mut Frame, lines: &[String], scroll: usize, title: &str) {
+    let area = f.area();
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(1), Constraint::Length(1)])
+        .split(area);
+
+    let main_area = chunks[0];
+    let status_area = chunks[1];
+
+    let text_lines: Vec<Line> = lines
+        .iter()
+        .map(|l| {
+            let style = if l.starts_with('+') && !l.starts_with("+++") {
+                Style::default().fg(Color::Green)
+            } else if l.starts_with('-') && !l.starts_with("---") {
+                Style::default().fg(Color::Red)
+            } else if l.starts_with("@@") {
+                Style::default().fg(Color::Cyan)
+            } else if l.starts_with("diff ") || l.starts_with("---") || l.starts_with("+++") {
+                Style::default().fg(Color::White).bold()
+            } else {
+                Style::default()
+            };
+            Line::from(Span::styled(l.clone(), style))
+        })
+        .collect();
+
+    let paragraph = Paragraph::new(Text::from(text_lines))
+        .scroll((scroll as u16, 0))
+        .block(Block::default().borders(Borders::NONE));
+
+    f.render_widget(paragraph, main_area);
+
+    let status = Paragraph::new(Line::from(vec![
+        Span::styled(title, Style::default().fg(Color::Cyan).bold()),
+        Span::styled("  q:close j/k:scroll", Style::default().fg(Color::DarkGray)),
+    ]))
+    .style(Style::default().bg(Color::DarkGray));
+
+    f.render_widget(status, status_area);
+}
+
+fn draw_input_overlay(f: &mut Frame, prompt: &str, value: &str) {
+    let area = f.area();
+
+    // Overwrite just the status bar with the input prompt
+    let status_area = Rect {
+        x: area.x,
+        y: area.y + area.height.saturating_sub(1),
+        width: area.width,
+        height: 1,
+    };
+
+    let input_line = Paragraph::new(Line::from(vec![
+        Span::styled(prompt, Style::default().fg(Color::Cyan).bold()),
+        Span::styled(value, Style::default().fg(Color::White)),
+        Span::styled("_", Style::default().fg(Color::White)),
+    ]))
+    .style(Style::default().bg(Color::DarkGray));
+
+    f.render_widget(input_line, status_area);
+}
+
+fn draw_help(f: &mut Frame) {
+    let area = f.area();
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(1), Constraint::Length(1)])
+        .split(area);
+
+    let help_text = vec![
+        "",
+        "  stg-tui keybindings",
+        "  ───────────────────",
+        "",
+        "  Navigation",
+        "    j/k, ↑/↓       Move cursor",
+        "    PgUp/PgDn       Scroll by page",
+        "    Home/End        Jump to top/bottom",
+        "    Enter           Expand/collapse patch files",
+        "",
+        "  Patch Operations",
+        "    r               Refresh current patch",
+        "    Ctrl-r          Refresh patch under cursor",
+        "    G               Goto patch under cursor",
+        "    > / <           Push next / pop current",
+        "    P               Push/pop marked patches",
+        "    M               Move marked patches to cursor",
+        "    N               New empty patch (prompts for message)",
+        "    c               Create patch from changes",
+        "    e               Edit patch commit message ($EDITOR)",
+        "    D               Delete patch(es)",
+        "    S               Squash marked patches",
+        "    C               Commit patch / uncommit history",
+        "",
+        "  Marking",
+        "    m               Mark patch",
+        "    u               Unmark patch",
+        "",
+        "  File Operations",
+        "    i               Stage/unstage file",
+        "    U               Revert file",
+        "    R               Resolve conflict",
+        "",
+        "  View & Settings",
+        "    =               Show diff",
+        "    t               Toggle untracked files",
+        "    H               Set history size",
+        "    g               Reload",
+        "    ?/h             This help screen",
+        "",
+        "  Other",
+        "    !               Repair stgit state",
+        "    Ctrl-z          Undo",
+        "    Ctrl-y          Redo",
+        "    q               Quit",
+    ];
+
+    let lines: Vec<Line> = help_text
+        .iter()
+        .map(|l| Line::from(Span::styled(*l, Style::default().fg(Color::White))))
+        .collect();
+
+    let paragraph = Paragraph::new(Text::from(lines))
+        .wrap(Wrap { trim: false })
+        .block(Block::default().borders(Borders::NONE));
+
+    f.render_widget(paragraph, chunks[0]);
+
+    let status = Paragraph::new(Line::from(vec![Span::styled(
+        "  Press q or ? to close",
+        Style::default().fg(Color::DarkGray),
+    )]))
+    .style(Style::default().bg(Color::DarkGray));
+
+    f.render_widget(status, chunks[1]);
 }
 
 fn render_line<'a>(app: &App, item: &LineItem, is_cursor: bool) -> Line<'a> {
@@ -113,8 +269,7 @@ fn render_line<'a>(app: &App, item: &LineItem, is_cursor: bool) -> Line<'a> {
             }
         }
         LineItem::PatchFile(pi, fi) => {
-            let files = app.patch_files.get(pi);
-            if let Some(files) = files {
+            if let Some(files) = app.patch_files.get(pi) {
                 if let Some(file) = files.get(*fi) {
                     spans.push(Span::styled("      ", Style::default()));
                     spans.push(Span::styled(

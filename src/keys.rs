@@ -1,10 +1,124 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use crate::app::{App, LineItem};
+use crate::app::{App, AppMode, InputAction, LineItem};
 use crate::stgit::{self, PatchStatus};
 
 impl App {
     pub fn handle_key(&mut self, key: KeyEvent) {
+        match &self.mode {
+            AppMode::Normal => self.handle_normal_key(key),
+            AppMode::DiffView { .. } => self.handle_diff_key(key),
+            AppMode::Input { .. } => self.handle_input_key(key),
+            AppMode::Help => self.handle_help_key(key),
+        }
+    }
+
+    fn handle_help_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('?') => {
+                self.mode = AppMode::Normal;
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_diff_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => {
+                self.mode = AppMode::Normal;
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if let AppMode::DiffView { scroll, lines, .. } = &mut self.mode {
+                    if *scroll + 1 < lines.len() {
+                        *scroll += 1;
+                    }
+                }
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                if let AppMode::DiffView { scroll, .. } = &mut self.mode {
+                    *scroll = scroll.saturating_sub(1);
+                }
+            }
+            KeyCode::PageDown => {
+                if let AppMode::DiffView { scroll, lines, .. } = &mut self.mode {
+                    *scroll = (*scroll + 20).min(lines.len().saturating_sub(1));
+                }
+            }
+            KeyCode::PageUp => {
+                if let AppMode::DiffView { scroll, .. } = &mut self.mode {
+                    *scroll = scroll.saturating_sub(20);
+                }
+            }
+            KeyCode::Home => {
+                if let AppMode::DiffView { scroll, .. } = &mut self.mode {
+                    *scroll = 0;
+                }
+            }
+            KeyCode::End => {
+                if let AppMode::DiffView { scroll, lines, .. } = &mut self.mode {
+                    *scroll = lines.len().saturating_sub(1);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_input_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc => {
+                self.mode = AppMode::Normal;
+            }
+            KeyCode::Enter => {
+                // Extract action and value, then process
+                let (action, value) = if let AppMode::Input { action, value, .. } = &self.mode {
+                    (action.clone(), value.clone())
+                } else {
+                    return;
+                };
+                self.mode = AppMode::Normal;
+                self.submit_input(action, &value);
+            }
+            KeyCode::Backspace => {
+                if let AppMode::Input { value, .. } = &mut self.mode {
+                    value.pop();
+                }
+            }
+            KeyCode::Char(c) => {
+                if let AppMode::Input { value, .. } = &mut self.mode {
+                    value.push(c);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn submit_input(&mut self, action: InputAction, value: &str) {
+        match action {
+            InputAction::NewPatch => {
+                let msg = if value.is_empty() { "New patch" } else { value };
+                let result = stgit::stg_new(msg);
+                self.run_op(result);
+            }
+            InputAction::CreatePatchFromChanges => {
+                let msg = if value.is_empty() { "New patch" } else { value };
+                let result = stgit::stg_new(msg);
+                self.run_op(result);
+                // Also refresh to absorb current changes
+                let result = stgit::stg_refresh(None);
+                self.run_op(result);
+            }
+            InputAction::HistorySize => {
+                if let Ok(n) = value.parse::<usize>() {
+                    self.history_count = n;
+                    self.reload();
+                } else {
+                    self.status_msg = "Invalid number".to_string();
+                }
+            }
+        }
+    }
+
+    fn handle_normal_key(&mut self, key: KeyEvent) {
         self.status_msg.clear();
 
         match (key.modifiers, key.code) {
@@ -134,10 +248,22 @@ impl App {
                 self.marked.clear();
             }
 
-            // New patch
+            // New patch (with prompt)
             (KeyModifiers::SHIFT, KeyCode::Char('N')) => {
-                let result = stgit::stg_new("New patch");
-                self.run_op(result);
+                self.mode = AppMode::Input {
+                    prompt: "Patch message: ".to_string(),
+                    value: String::new(),
+                    action: InputAction::NewPatch,
+                };
+            }
+
+            // Create patch from changes
+            (KeyModifiers::NONE, KeyCode::Char('c')) => {
+                self.mode = AppMode::Input {
+                    prompt: "New patch message: ".to_string(),
+                    value: String::new(),
+                    action: InputAction::CreatePatchFromChanges,
+                };
             }
 
             // Delete
@@ -205,6 +331,11 @@ impl App {
                 }
             }
 
+            // Commit/uncommit
+            (KeyModifiers::SHIFT, KeyCode::Char('C')) => {
+                self.handle_commit_uncommit();
+            }
+
             // Undo/redo
             (KeyModifiers::CONTROL, KeyCode::Char('z')) => {
                 let result = stgit::stg_undo(false);
@@ -215,14 +346,32 @@ impl App {
                 self.run_op(result);
             }
 
-            // Show diff (placeholder)
+            // Repair
+            (KeyModifiers::NONE, KeyCode::Char('!')) => {
+                let result = stgit::stg_repair();
+                self.run_op(result);
+            }
+
+            // History size
+            (KeyModifiers::SHIFT, KeyCode::Char('H')) => {
+                self.mode = AppMode::Input {
+                    prompt: format!("History size [{}]: ", self.history_count),
+                    value: String::new(),
+                    action: InputAction::HistorySize,
+                };
+            }
+
+            // Show diff
             (KeyModifiers::NONE, KeyCode::Char('=')) => {
-                self.status_msg = "Diff view not yet implemented".to_string();
+                self.open_diff_view();
             }
 
             // Help
-            (KeyModifiers::NONE, KeyCode::Char('h') | KeyCode::Char('?')) => {
-                self.status_msg = "q:quit g:reload r:refresh G:goto >/<:push/pop m/u:mark P:push/pop i:stage e:edit D:del S:squash".to_string();
+            (KeyModifiers::NONE, KeyCode::Char('?')) => {
+                self.mode = AppMode::Help;
+            }
+            (KeyModifiers::NONE, KeyCode::Char('h')) => {
+                self.mode = AppMode::Help;
             }
 
             _ => {}
@@ -249,6 +398,65 @@ impl App {
                 self.expanded.push(i);
             }
             self.rebuild_lines();
+        }
+    }
+
+    fn open_diff_view(&mut self) {
+        let result = match self.current_line().clone() {
+            LineItem::Patch(i) | LineItem::PatchFile(i, _) => {
+                let name = self.state.patches[i].name.clone();
+                stgit::stg_diff(&name).map(|d| (d, format!("Patch: {name}")))
+            }
+            LineItem::IndexFile(i) => {
+                let path = self.state.index_files[i].path.clone();
+                stgit::git_diff(&path, true).map(|d| (d, format!("Index: {path}")))
+            }
+            LineItem::WorkTreeFile(i) => {
+                let path = self.state.worktree_files[i].path.clone();
+                stgit::git_diff(&path, false).map(|d| (d, format!("WorkTree: {path}")))
+            }
+            _ => return,
+        };
+
+        match result {
+            Ok((diff, title)) => {
+                let lines: Vec<String> = diff.lines().map(|l| l.to_string()).collect();
+                if lines.is_empty() {
+                    self.status_msg = "No diff to show".to_string();
+                } else {
+                    self.mode = AppMode::DiffView {
+                        lines,
+                        scroll: 0,
+                        title,
+                    };
+                }
+            }
+            Err(e) => {
+                self.status_msg = format!("Error: {e}");
+            }
+        }
+    }
+
+    fn handle_commit_uncommit(&mut self) {
+        match self.current_line().clone() {
+            LineItem::Patch(i) => {
+                let patch = &self.state.patches[i];
+                if patch.status == PatchStatus::Applied || patch.status == PatchStatus::Current {
+                    let indices = self.effective_patches();
+                    let names = self.patch_names(&indices);
+                    let refs: Vec<&str> = names.iter().map(|s| s.as_str()).collect();
+                    let result = stgit::stg_commit(&refs);
+                    self.run_op(result);
+                    self.marked.clear();
+                }
+            }
+            LineItem::History(i) => {
+                // Uncommit: i is index from newest (0) to oldest
+                let count = i + 1;
+                let result = stgit::stg_uncommit(count);
+                self.run_op(result);
+            }
+            _ => {}
         }
     }
 }

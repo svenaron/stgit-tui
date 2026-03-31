@@ -4,6 +4,31 @@ use anyhow::Result;
 
 use crate::stgit::{self, FileStatus, PatchStatus};
 
+/// What action to perform when an input prompt is submitted
+#[derive(Debug, Clone)]
+pub enum InputAction {
+    NewPatch,
+    CreatePatchFromChanges,
+    HistorySize,
+}
+
+/// The current UI mode
+#[derive(Debug)]
+pub enum AppMode {
+    Normal,
+    DiffView {
+        lines: Vec<String>,
+        scroll: usize,
+        title: String,
+    },
+    Input {
+        prompt: String,
+        value: String,
+        action: InputAction,
+    },
+    Help,
+}
+
 /// What kind of line the cursor is on
 #[derive(Debug, Clone)]
 pub enum LineItem {
@@ -29,6 +54,7 @@ pub struct App {
     pub show_unknown: bool,
     pub status_msg: String,
     pub should_quit: bool,
+    pub mode: AppMode,
 }
 
 impl App {
@@ -46,6 +72,7 @@ impl App {
             show_unknown: false,
             status_msg: String::new(),
             should_quit: false,
+            mode: AppMode::Normal,
         };
         app.rebuild_lines();
         app.cursor = app.find_index_header().unwrap_or(0);
