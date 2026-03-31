@@ -290,13 +290,13 @@ impl App {
                 }
             }
 
-            // Push/pop
-            (KeyModifiers::SHIFT, KeyCode::Char('>')) => {
+            // Push next (> key)
+            (_, KeyCode::Char('>')) | (KeyModifiers::SHIFT, KeyCode::Char('.')) => {
                 let result = stgit::stg_push_one();
                 self.run_op(result);
             }
-            (KeyModifiers::SHIFT, KeyCode::Char('<'))
-            | (KeyModifiers::NONE, KeyCode::Char('<')) => {
+            // Pop current (< key)
+            (_, KeyCode::Char('<')) | (KeyModifiers::SHIFT, KeyCode::Char(',')) => {
                 let result = stgit::stg_pop_current();
                 self.run_op(result);
             }
@@ -334,7 +334,7 @@ impl App {
 
             // New patch
             (KeyModifiers::SHIFT, KeyCode::Char('N')) => {
-                let result = stgit::stg_new("", "New patch");
+                let result = stgit::stg_new("New patch");
                 self.run_op(result);
             }
 

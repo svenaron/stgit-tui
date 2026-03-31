@@ -324,8 +324,8 @@ pub fn stg_push_one() -> Result<(bool, String, String)> {
     run_cmd_ok("stg", &["push"])
 }
 
-pub fn stg_new(name: &str, message: &str) -> Result<(bool, String, String)> {
-    run_cmd_ok("stg", &["new", "-m", message, name])
+pub fn stg_new(message: &str) -> Result<(bool, String, String)> {
+    run_cmd_ok("stg", &["new", "-m", message])
 }
 
 pub fn stg_delete(patches: &[&str]) -> Result<(bool, String, String)> {
@@ -399,7 +399,7 @@ pub fn git_revert_worktree(path: &str) -> Result<(bool, String, String)> {
 }
 
 pub fn git_revert_index(path: &str) -> Result<(bool, String, String)> {
-    run_cmd_ok("git", &["reset", "HEAD", path])
+    run_cmd_ok("git", &["checkout", "HEAD", "--", path])
 }
 
 pub fn git_diff(path: &str, cached: bool) -> Result<String> {
