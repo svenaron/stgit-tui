@@ -3,8 +3,8 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph},
 };
 
+use crate::app::{App, LineItem};
 use crate::stgit::{FileStatus, PatchStatus};
-use crate::{App, LineItem};
 
 pub fn draw(f: &mut Frame, app: &App) {
     let area = f.area();
