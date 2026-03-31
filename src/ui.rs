@@ -378,7 +378,7 @@ fn render_line<'a>(app: &App, item: &LineItem, is_cursor: bool) -> Line<'a> {
 
     let mut line = Line::from(spans);
     if is_cursor {
-        line = line.patch_style(Style::default().bg(Color::Rgb(40, 40, 60)));
+        line = line.patch_style(Style::default().add_modifier(Modifier::REVERSED));
     }
     line
 }
