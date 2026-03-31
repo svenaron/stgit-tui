@@ -1,3 +1,4 @@
+#[allow(dead_code)]
 mod stgit;
 mod ui;
 
@@ -7,7 +8,7 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use ratatui::{prelude::*, backend::CrosstermBackend};
+use ratatui::{backend::CrosstermBackend, prelude::*};
 use std::io;
 
 use stgit::PatchStatus;
@@ -30,7 +31,7 @@ pub struct App {
     pub state: stgit::StackState,
     pub cursor: usize,
     pub lines: Vec<LineItem>,
-    pub marked: Vec<usize>, // indices into state.patches
+    pub marked: Vec<usize>,   // indices into state.patches
     pub expanded: Vec<usize>, // indices into state.patches that are expanded
     pub patch_files: std::collections::HashMap<usize, Vec<stgit::FileEntry>>,
     pub history_count: usize,
@@ -62,7 +63,9 @@ impl App {
     }
 
     fn find_index_header(&self) -> Option<usize> {
-        self.lines.iter().position(|l| matches!(l, LineItem::IndexHeader))
+        self.lines
+            .iter()
+            .position(|l| matches!(l, LineItem::IndexHeader))
     }
 
     pub fn rebuild_lines(&mut self) {
@@ -77,7 +80,11 @@ impl App {
         }
 
         // Applied patches (in stack order: bottom first, current/top last)
-        let applied: Vec<usize> = self.state.patches.iter().enumerate()
+        let applied: Vec<usize> = self
+            .state
+            .patches
+            .iter()
+            .enumerate()
             .filter(|(_, p)| p.status == PatchStatus::Applied || p.status == PatchStatus::Current)
             .map(|(i, _)| i)
             .collect();
@@ -109,7 +116,11 @@ impl App {
         }
 
         // Unapplied patches
-        let unapplied: Vec<usize> = self.state.patches.iter().enumerate()
+        let unapplied: Vec<usize> = self
+            .state
+            .patches
+            .iter()
+            .enumerate()
             .filter(|(_, p)| p.status == PatchStatus::Unapplied)
             .map(|(i, _)| i)
             .collect();
@@ -170,7 +181,8 @@ impl App {
     }
 
     fn patch_names(&self, indices: &[usize]) -> Vec<String> {
-        indices.iter()
+        indices
+            .iter()
             .filter_map(|&i| self.state.patches.get(i))
             .map(|p| p.name.clone())
             .collect()
@@ -283,7 +295,8 @@ impl App {
                 let result = stgit::stg_push_one();
                 self.run_op(result);
             }
-            (KeyModifiers::SHIFT, KeyCode::Char('<')) | (KeyModifiers::NONE, KeyCode::Char('<')) => {
+            (KeyModifiers::SHIFT, KeyCode::Char('<'))
+            | (KeyModifiers::NONE, KeyCode::Char('<')) => {
                 let result = stgit::stg_pop_current();
                 self.run_op(result);
             }
@@ -352,38 +365,34 @@ impl App {
             }
 
             // Stage/unstage
-            (KeyModifiers::NONE, KeyCode::Char('i')) => {
-                match self.current_line().clone() {
-                    LineItem::WorkTreeFile(i) => {
-                        let path = self.state.worktree_files[i].path.clone();
-                        let result = stgit::git_stage(&path);
-                        self.run_op(result);
-                    }
-                    LineItem::IndexFile(i) => {
-                        let path = self.state.index_files[i].path.clone();
-                        let result = stgit::git_unstage(&path);
-                        self.run_op(result);
-                    }
-                    _ => {}
+            (KeyModifiers::NONE, KeyCode::Char('i')) => match self.current_line().clone() {
+                LineItem::WorkTreeFile(i) => {
+                    let path = self.state.worktree_files[i].path.clone();
+                    let result = stgit::git_stage(&path);
+                    self.run_op(result);
                 }
-            }
+                LineItem::IndexFile(i) => {
+                    let path = self.state.index_files[i].path.clone();
+                    let result = stgit::git_unstage(&path);
+                    self.run_op(result);
+                }
+                _ => {}
+            },
 
             // Revert
-            (KeyModifiers::SHIFT, KeyCode::Char('U')) => {
-                match self.current_line().clone() {
-                    LineItem::WorkTreeFile(i) => {
-                        let path = self.state.worktree_files[i].path.clone();
-                        let result = stgit::git_revert_worktree(&path);
-                        self.run_op(result);
-                    }
-                    LineItem::IndexFile(i) => {
-                        let path = self.state.index_files[i].path.clone();
-                        let result = stgit::git_revert_index(&path);
-                        self.run_op(result);
-                    }
-                    _ => {}
+            (KeyModifiers::SHIFT, KeyCode::Char('U')) => match self.current_line().clone() {
+                LineItem::WorkTreeFile(i) => {
+                    let path = self.state.worktree_files[i].path.clone();
+                    let result = stgit::git_revert_worktree(&path);
+                    self.run_op(result);
                 }
-            }
+                LineItem::IndexFile(i) => {
+                    let path = self.state.index_files[i].path.clone();
+                    let result = stgit::git_revert_index(&path);
+                    self.run_op(result);
+                }
+                _ => {}
+            },
 
             // Resolve conflict
             (KeyModifiers::SHIFT, KeyCode::Char('R')) => {
@@ -419,23 +428,25 @@ impl App {
     }
 
     fn handle_enter(&mut self) {
-        match self.current_line().clone() {
-            LineItem::Patch(i) => {
-                if self.expanded.contains(&i) {
-                    self.expanded.retain(|&x| x != i);
-                } else {
-                    if !self.patch_files.contains_key(&i) {
-                        let name = &self.state.patches[i].name;
-                        match stgit::get_patch_files(name) {
-                            Ok(files) => { self.patch_files.insert(i, files); }
-                            Err(e) => { self.status_msg = format!("Error: {e}"); return; }
+        if let LineItem::Patch(i) = self.current_line().clone() {
+            if self.expanded.contains(&i) {
+                self.expanded.retain(|&x| x != i);
+            } else {
+                if !self.patch_files.contains_key(&i) {
+                    let name = &self.state.patches[i].name;
+                    match stgit::get_patch_files(name) {
+                        Ok(files) => {
+                            self.patch_files.insert(i, files);
+                        }
+                        Err(e) => {
+                            self.status_msg = format!("Error: {e}");
+                            return;
                         }
                     }
-                    self.expanded.push(i);
                 }
-                self.rebuild_lines();
+                self.expanded.push(i);
             }
-            _ => {}
+            self.rebuild_lines();
         }
     }
 }

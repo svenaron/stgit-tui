@@ -105,15 +105,7 @@ pub fn get_history(count: usize) -> Result<Vec<String>> {
     if base.is_empty() {
         return Ok(vec![]);
     }
-    let output = run_cmd(
-        "git",
-        &[
-            "log",
-            "--format=%s",
-            &format!("-{count}"),
-            &base,
-        ],
-    )?;
+    let output = run_cmd("git", &["log", "--format=%s", &format!("-{count}"), &base])?;
     Ok(output.lines().map(|l| l.to_string()).collect())
 }
 
@@ -244,7 +236,7 @@ fn parse_name_status(output: &str) -> Vec<FileEntry> {
             _ => FileStatus::Modified,
         };
         // Skip status char and tab
-        let path = line.splitn(2, '\t').nth(1).unwrap_or("").to_string();
+        let path = line.split_once('\t').map(|x| x.1).unwrap_or("").to_string();
         // For renames, the path contains "old\tnew"
         let path = if status == FileStatus::Renamed || status == FileStatus::Copied {
             path.splitn(2, '\t').last().unwrap_or(&path).to_string()
@@ -310,10 +302,6 @@ pub fn stg_refresh(patch: Option<&str>) -> Result<(bool, String, String)> {
 
 pub fn stg_goto(patch: &str) -> Result<(bool, String, String)> {
     run_cmd_ok("stg", &["goto", patch])
-}
-
-pub fn stg_push_next() -> Result<(bool, String, String)> {
-    run_cmd_ok("stg", &["push", "--noapply"])
 }
 
 pub fn stg_push(patches: &[&str]) -> Result<(bool, String, String)> {

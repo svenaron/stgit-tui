@@ -3,8 +3,8 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph},
 };
 
+use crate::stgit::{FileStatus, PatchStatus};
 use crate::{App, LineItem};
-use crate::stgit::{PatchStatus, FileStatus};
 
 pub fn draw(f: &mut Frame, app: &App) {
     let area = f.area();
@@ -12,10 +12,7 @@ pub fn draw(f: &mut Frame, app: &App) {
     // Main area + status line
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Min(1),
-            Constraint::Length(1),
-        ])
+        .constraints([Constraint::Min(1), Constraint::Length(1)])
         .split(area);
 
     let main_area = chunks[0];
@@ -45,9 +42,10 @@ pub fn draw(f: &mut Frame, app: &App) {
     f.render_widget(paragraph, main_area);
 
     // Status line
-    let status = Paragraph::new(Line::from(vec![
-        Span::styled(&app.status_msg, Style::default().fg(Color::Yellow)),
-    ]))
+    let status = Paragraph::new(Line::from(vec![Span::styled(
+        &app.status_msg,
+        Style::default().fg(Color::Yellow),
+    )]))
     .style(Style::default().bg(Color::DarkGray));
 
     f.render_widget(status, status_area);
@@ -58,14 +56,20 @@ fn render_line<'a>(app: &App, item: &LineItem, is_cursor: bool) -> Line<'a> {
 
     match item {
         LineItem::Header => {
-            spans.push(Span::styled("Branch: ", Style::default().fg(Color::White).bold()));
+            spans.push(Span::styled(
+                "Branch: ",
+                Style::default().fg(Color::White).bold(),
+            ));
             spans.push(Span::styled(
                 app.state.branch.name.clone(),
                 Style::default().fg(Color::Cyan).bold(),
             ));
             if let Some(ref upstream) = app.state.branch.upstream {
                 spans.push(Span::styled(" <-> ", Style::default().fg(Color::DarkGray)));
-                spans.push(Span::styled(upstream.clone(), Style::default().fg(Color::Cyan)));
+                spans.push(Span::styled(
+                    upstream.clone(),
+                    Style::default().fg(Color::Cyan),
+                ));
             }
         }
         LineItem::History(i) => {
@@ -100,10 +104,7 @@ fn render_line<'a>(app: &App, item: &LineItem, is_cursor: bool) -> Line<'a> {
                 format!("{prefix}{mark}{empty_indicator}"),
                 style,
             ));
-            spans.push(Span::styled(
-                format!("{}", patch.name),
-                style,
-            ));
+            spans.push(Span::styled(patch.name.to_string(), style));
             if !patch.description.is_empty() {
                 spans.push(Span::styled(
                     format!("  # {}", patch.description),
@@ -120,12 +121,18 @@ fn render_line<'a>(app: &App, item: &LineItem, is_cursor: bool) -> Line<'a> {
                         format!("{:<12}", file.status.label()),
                         file_status_style(&file.status),
                     ));
-                    spans.push(Span::styled(file.path.clone(), Style::default().fg(Color::White)));
+                    spans.push(Span::styled(
+                        file.path.clone(),
+                        Style::default().fg(Color::White),
+                    ));
                 }
             }
         }
         LineItem::IndexHeader => {
-            spans.push(Span::styled("  Index", Style::default().fg(Color::Yellow).bold()));
+            spans.push(Span::styled(
+                "  Index",
+                Style::default().fg(Color::Yellow).bold(),
+            ));
         }
         LineItem::IndexFile(i) => {
             let file = &app.state.index_files[*i];
@@ -134,10 +141,16 @@ fn render_line<'a>(app: &App, item: &LineItem, is_cursor: bool) -> Line<'a> {
                 format!("{:<12}", file.status.label()),
                 file_status_style(&file.status),
             ));
-            spans.push(Span::styled(file.path.clone(), Style::default().fg(Color::White)));
+            spans.push(Span::styled(
+                file.path.clone(),
+                Style::default().fg(Color::White),
+            ));
         }
         LineItem::WorkTreeHeader => {
-            spans.push(Span::styled("  Work Tree", Style::default().fg(Color::Yellow).bold()));
+            spans.push(Span::styled(
+                "  Work Tree",
+                Style::default().fg(Color::Yellow).bold(),
+            ));
         }
         LineItem::WorkTreeFile(i) => {
             let file = &app.state.worktree_files[*i];
@@ -146,7 +159,10 @@ fn render_line<'a>(app: &App, item: &LineItem, is_cursor: bool) -> Line<'a> {
                 format!("{:<12}", file.status.label()),
                 file_status_style(&file.status),
             ));
-            spans.push(Span::styled(file.path.clone(), Style::default().fg(Color::White)));
+            spans.push(Span::styled(
+                file.path.clone(),
+                Style::default().fg(Color::White),
+            ));
         }
         LineItem::Footer => {
             spans.push(Span::styled("--", Style::default().fg(Color::DarkGray)));
