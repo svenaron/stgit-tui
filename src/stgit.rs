@@ -396,6 +396,24 @@ pub fn git_resolve(path: &str) -> Result<(bool, String, String)> {
 
 // --- Branch operations ---
 
+/// List all local and remote branch refs for completion
+pub fn git_branch_list() -> Result<Vec<String>> {
+    let output = run_cmd(
+        "git",
+        &[
+            "branch",
+            "-a",
+            "--format=%(refname:short)",
+            "--sort=-committerdate",
+        ],
+    )?;
+    Ok(output
+        .lines()
+        .filter(|l| !l.is_empty())
+        .map(|l| l.to_string())
+        .collect())
+}
+
 pub fn stg_branch_list() -> Result<Vec<String>> {
     let output = run_cmd("stg", &["branch", "--list"])?;
     Ok(output

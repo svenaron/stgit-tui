@@ -13,10 +13,11 @@ pub fn draw(f: &mut Frame, app: &App) {
         AppMode::Input {
             prompt,
             value,
-            action: _,
+            completions,
+            ..
         } => {
             draw_normal(f, app);
-            draw_input_overlay(f, prompt, value);
+            draw_input_overlay(f, prompt, value, completions);
         }
         AppMode::Help => draw_help(f),
         AppMode::BranchList { branches, selected } => draw_branch_list(f, branches, *selected),
@@ -165,21 +166,63 @@ fn diff_line_style(line: &str) -> Style {
     }
 }
 
-fn draw_input_overlay(f: &mut Frame, prompt: &str, value: &str) {
+fn draw_input_overlay(f: &mut Frame, prompt: &str, value: &str, completions: &[String]) {
     let area = f.area();
 
-    // Overwrite just the status bar with the input prompt
+    // Filter completions that match current input
+    let filtered: Vec<&String> = if completions.is_empty() || value.is_empty() {
+        Vec::new()
+    } else {
+        completions
+            .iter()
+            .filter(|c| {
+                let cl = c.to_lowercase();
+                let vl = value.to_lowercase();
+                cl.contains(&vl) && cl != vl
+            })
+            .take(5)
+            .collect()
+    };
+
+    let suggestion_height = filtered.len() as u16;
+    let total_height = 1 + suggestion_height;
+    let start_y = area.y + area.height.saturating_sub(total_height);
+
+    // Draw suggestion lines above the input
+    for (i, suggestion) in filtered.iter().enumerate() {
+        let suggestion_area = Rect {
+            x: area.x,
+            y: start_y + i as u16,
+            width: area.width,
+            height: 1,
+        };
+        let line = Paragraph::new(Line::from(vec![
+            Span::styled("  ", Style::default()),
+            Span::styled((*suggestion).clone(), Style::default().fg(Color::DarkGray)),
+        ]))
+        .style(Style::default().bg(Color::Rgb(30, 30, 40)));
+        f.render_widget(line, suggestion_area);
+    }
+
+    // Input line at the bottom
     let status_area = Rect {
         x: area.x,
-        y: area.y + area.height.saturating_sub(1),
+        y: start_y + suggestion_height,
         width: area.width,
         height: 1,
+    };
+
+    let tab_hint = if !completions.is_empty() {
+        Span::styled("  [Tab: complete]", Style::default().fg(Color::DarkGray))
+    } else {
+        Span::default()
     };
 
     let input_line = Paragraph::new(Line::from(vec![
         Span::styled(prompt, Style::default().fg(Color::Cyan).bold()),
         Span::styled(value, Style::default().fg(Color::White)),
         Span::styled("_", Style::default().fg(Color::White)),
+        tab_hint,
     ]))
     .style(Style::default().bg(Color::DarkGray));
 

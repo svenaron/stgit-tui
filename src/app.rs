@@ -13,6 +13,7 @@ pub enum InputAction {
     BranchCreate,
     ConfirmPush,
     ConfirmForcePush,
+    Rebase,
 }
 
 /// Where the diff came from — needed to know how to stage/unstage
@@ -244,12 +245,43 @@ pub enum AppMode {
         prompt: String,
         value: String,
         action: InputAction,
+        /// Completion candidates (empty = no completions)
+        completions: Vec<String>,
+        /// Currently selected completion index
+        completion_idx: Option<usize>,
     },
     Help,
     BranchList {
         branches: Vec<String>,
         selected: usize,
     },
+}
+
+impl AppMode {
+    pub fn input(prompt: impl Into<String>, action: InputAction) -> Self {
+        AppMode::Input {
+            prompt: prompt.into(),
+            value: String::new(),
+            action,
+            completions: Vec::new(),
+            completion_idx: None,
+        }
+    }
+
+    pub fn input_with_completions(
+        prompt: impl Into<String>,
+        value: impl Into<String>,
+        action: InputAction,
+        completions: Vec<String>,
+    ) -> Self {
+        AppMode::Input {
+            prompt: prompt.into(),
+            value: value.into(),
+            action,
+            completions,
+            completion_idx: None,
+        }
+    }
 }
 
 /// What kind of line the cursor is on

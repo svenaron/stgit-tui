@@ -222,7 +222,6 @@ impl App {
                 self.mode = AppMode::Normal;
             }
             KeyCode::Enter => {
-                // Extract action and value, then process
                 let (action, value) = if let AppMode::Input { action, value, .. } = &self.mode {
                     (action.clone(), value.clone())
                 } else {
@@ -232,13 +231,95 @@ impl App {
                 self.submit_input(action, &value);
             }
             KeyCode::Backspace => {
-                if let AppMode::Input { value, .. } = &mut self.mode {
+                if let AppMode::Input {
+                    value,
+                    completion_idx,
+                    ..
+                } = &mut self.mode
+                {
                     value.pop();
+                    *completion_idx = None;
+                }
+            }
+            KeyCode::Tab => {
+                // Cycle through matching completions
+                if let AppMode::Input {
+                    value,
+                    completions,
+                    completion_idx,
+                    ..
+                } = &mut self.mode
+                {
+                    let matches: Vec<usize> = completions
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, c)| {
+                            c.to_lowercase().contains(&value.to_lowercase()) || value.is_empty()
+                        })
+                        .map(|(i, _)| i)
+                        .collect();
+
+                    if !matches.is_empty() {
+                        let next = match completion_idx {
+                            Some(current) => {
+                                // Find next match after current
+                                matches
+                                    .iter()
+                                    .find(|&&i| i > *current)
+                                    .or(matches.first())
+                                    .copied()
+                                    .unwrap()
+                            }
+                            None => matches[0],
+                        };
+                        *value = completions[next].clone();
+                        *completion_idx = Some(next);
+                    }
+                }
+            }
+            KeyCode::BackTab => {
+                // Cycle backwards through completions
+                if let AppMode::Input {
+                    value,
+                    completions,
+                    completion_idx,
+                    ..
+                } = &mut self.mode
+                {
+                    let matches: Vec<usize> = completions
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, c)| {
+                            c.to_lowercase().contains(&value.to_lowercase()) || value.is_empty()
+                        })
+                        .map(|(i, _)| i)
+                        .collect();
+
+                    if !matches.is_empty() {
+                        let prev = match completion_idx {
+                            Some(current) => matches
+                                .iter()
+                                .rev()
+                                .find(|&&i| i < *current)
+                                .or(matches.last())
+                                .copied()
+                                .unwrap(),
+                            None => *matches.last().unwrap(),
+                        };
+                        *value = completions[prev].clone();
+                        *completion_idx = Some(prev);
+                    }
                 }
             }
             KeyCode::Char(c) => {
-                if let AppMode::Input { value, .. } = &mut self.mode {
+                if let AppMode::Input {
+                    value,
+                    completion_idx,
+                    ..
+                } = &mut self.mode
+                {
                     value.push(c);
+                    *completion_idx = None;
                 }
             }
             _ => {}
@@ -286,6 +367,12 @@ impl App {
                     self.run_op(result);
                 }
             }
+            InputAction::Rebase => {
+                if !value.is_empty() {
+                    let result = stgit::stg_rebase(Some(value));
+                    self.run_op(result);
+                }
+            }
         }
     }
 
@@ -325,11 +412,7 @@ impl App {
                 }
             }
             KeyCode::Char('n') => {
-                self.mode = AppMode::Input {
-                    prompt: "New branch name: ".to_string(),
-                    value: String::new(),
-                    action: InputAction::BranchCreate,
-                };
+                self.mode = AppMode::input("New branch name: ", InputAction::BranchCreate);
             }
             _ => {}
         }
@@ -467,20 +550,13 @@ impl App {
 
             // New patch (with prompt)
             (KeyModifiers::SHIFT, KeyCode::Char('N')) => {
-                self.mode = AppMode::Input {
-                    prompt: "Patch message: ".to_string(),
-                    value: String::new(),
-                    action: InputAction::NewPatch,
-                };
+                self.mode = AppMode::input("Patch message: ", InputAction::NewPatch);
             }
 
             // Create patch from changes
             (KeyModifiers::NONE, KeyCode::Char('c')) => {
-                self.mode = AppMode::Input {
-                    prompt: "New patch message: ".to_string(),
-                    value: String::new(),
-                    action: InputAction::CreatePatchFromChanges,
-                };
+                self.mode =
+                    AppMode::input("New patch message: ", InputAction::CreatePatchFromChanges);
             }
 
             // Delete
@@ -571,11 +647,10 @@ impl App {
 
             // History size
             (KeyModifiers::SHIFT, KeyCode::Char('H')) => {
-                self.mode = AppMode::Input {
-                    prompt: format!("History size [{}]: ", self.history_count),
-                    value: String::new(),
-                    action: InputAction::HistorySize,
-                };
+                self.mode = AppMode::input(
+                    format!("History size [{}]: ", self.history_count),
+                    InputAction::HistorySize,
+                );
             }
 
             // Show diff
@@ -605,24 +680,23 @@ impl App {
 
             // Push (with confirmation)
             (KeyModifiers::NONE, KeyCode::Char('p')) => {
-                self.mode = AppMode::Input {
-                    prompt: "Push to remote? (y/n): ".to_string(),
-                    value: String::new(),
-                    action: InputAction::ConfirmPush,
-                };
+                self.mode = AppMode::input("Push to remote? (y/n): ", InputAction::ConfirmPush);
             }
             (KeyModifiers::SHIFT, KeyCode::Char('F')) => {
-                self.mode = AppMode::Input {
-                    prompt: "Force push? (y/n): ".to_string(),
-                    value: String::new(),
-                    action: InputAction::ConfirmForcePush,
-                };
+                self.mode = AppMode::input("Force push? (y/n): ", InputAction::ConfirmForcePush);
             }
 
             // Rebase
             (KeyModifiers::SHIFT, KeyCode::Char('B')) => {
-                let result = stgit::stg_rebase(None);
-                self.run_op(result);
+                // Get upstream as default, and all branches for completion
+                let upstream = self.state.branch.upstream.clone().unwrap_or_default();
+                let branches = stgit::git_branch_list().unwrap_or_default();
+                self.mode = AppMode::input_with_completions(
+                    "Rebase onto: ",
+                    upstream,
+                    InputAction::Rebase,
+                    branches,
+                );
             }
 
             // Help
